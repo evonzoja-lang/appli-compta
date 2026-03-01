@@ -38,9 +38,8 @@ init_db()
 
 CATEGORIES = ["Ventes", "Achats", "Formation","Salaires", "Cotisations", "Reparation", "Materiels", "Location","Autres"]
 COMPTES = ["Caisse", "Banque","Mobile Money","Autres"]
-MODES_PAIEMENT = ["Cash", "Chèque", "Lumicash", "Ecocash", 
-                  "Bancobu Enoti", "Ihera", "Cashtel", 
-                  "Gasape Cash", "Akaravyo"]
+MODES_PAIEMENT = ["Cash", "Chèque", "Lumicash", "Ecocash", "Bancobu Enoti", "Ihera", "Cashtel", "Gasape Cash", "Akaravyo", "autres"]
+TYPES_TRANSACTION = ["Entrée", "Sortie"]
 MODIFIER_ID = None
 
 # -----------------------
@@ -190,54 +189,74 @@ def rechercher_transactions():
     conn = sqlite3.connect("comptabilite.db")
     cursor = conn.cursor()
 
-    query = "SELECT * FROM transactions WHERE 1=1"
+    requete = "SELECT * FROM transactions WHERE 1=1"
     params = []
 
-    # Catégorie
-    if filtre_categorie.get():
-        query += " AND categorie = ?"
-        params.append(filtre_categorie.get())
+    # --- NORMALISATION ---
+    categorie = filtre_categorie.get().strip()
+    type_tx = filtre_type.get().strip()
+    compte = filtre_compte.get().strip()
+    mode = filtre_mode.get().strip()
 
-    # Type
-    if filtre_type.get():
-        query += " AND type = ?"
-        params.append(filtre_type.get())
+    date_exacte = filtre_date.get().strip()
+    date_debut = filtre_date_debut.get().strip()
+    date_fin = filtre_date_fin.get().strip()
 
-    # Compte
-    if filtre_compte.get():
-        query += " AND compte = ?"
-        params.append(filtre_compte.get())
+    # -----------------------
+    # FILTRES TEXTE (indépendants)
+    # -----------------------
 
-    # Mode paiement
-    if filtre_mode.get():
-        query += " AND mode_paiement = ?"
-        params.append(filtre_mode.get())
+    if categorie:
+        requete += " AND LOWER(TRIM(categorie)) = LOWER(TRIM(?))"
+        params.append(categorie)
 
-    # Date exacte
-    if filtre_date.get():
-        date_exacte = datetime.datetime.strptime(
-            filtre_date.get(), "%d-%m-%Y"
-        ).strftime("%Y-%m-%d")
+    if type_tx:
+        requete += " AND LOWER(TRIM(type)) = LOWER(TRIM(?))"
+        params.append(type_tx)
 
-        query += " AND date = ?"
-        params.append(date_exacte)
+    if compte:
+        requete += " AND LOWER(TRIM(compte)) = LOWER(TRIM(?))"
+        params.append(compte)
 
-    # Intervalle date
-    if filtre_date_debut.get() and filtre_date_fin.get():
-        date_debut = datetime.datetime.strptime(
-            filtre_date_debut.get(), "%d-%m-%Y"
-        ).strftime("%Y-%m-%d")
+    if mode:
+        requete += " AND LOWER(TRIM(mode_paiement)) = LOWER(TRIM(?))"
+        params.append(mode)
 
-        date_fin = datetime.datetime.strptime(
-            filtre_date_fin.get(), "%d-%m-%Y"
-        ).strftime("%Y-%m-%d")
+    # -----------------------
+    # FILTRES DATE (indépendants)
+    # -----------------------
 
-        query += " AND date BETWEEN ? AND ?"
-        params.extend([date_debut, date_fin])
+    try:
+        # Date exacte seule
+        if date_exacte:
+            date_sql = datetime.datetime.strptime(date_exacte, "%d-%m-%Y").strftime("%Y-%m-%d")
+            requete += " AND date = ?"
+            params.append(date_sql)
 
-    query += " ORDER BY date DESC"
+        # Date début seule
+        if date_debut:
+            date_debut_sql = datetime.datetime.strptime(date_debut, "%d-%m-%Y").strftime("%Y-%m-%d")
+            requete += " AND date >= ?"
+            params.append(date_debut_sql)
 
-    cursor.execute(query, params)
+        # Date fin seule
+        if date_fin:
+            date_fin_sql = datetime.datetime.strptime(date_fin, "%d-%m-%Y").strftime("%Y-%m-%d")
+            requete += " AND date <= ?"
+            params.append(date_fin_sql)
+
+    except ValueError:
+        messagebox.showerror("Erreur", "Format de date invalide.")
+        conn.close()
+        return
+
+    # Tri chronologique propre
+    requete += " ORDER BY date DESC"
+
+    print("REQUETE:", requete)
+    print("PARAMS:", params)
+
+    cursor.execute(requete, params)
     transactions = cursor.fetchall()
 
     conn.close()
@@ -245,8 +264,15 @@ def rechercher_transactions():
     mise_a_jour_tableau(transactions)
 
 def tout_afficher():
-    effacer_champs()
-    mise_a_jour_tableau()
+    conn = sqlite3.connect("comptabilite.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM transactions ORDER BY date DESC")
+    transactions = cursor.fetchall()
+
+    conn.close()
+
+    mise_a_jour_tableau(transactions)
 
 # -----------------------
 # RAPPORTS
@@ -274,33 +300,100 @@ def afficher_rapport(transactions, titre):
     if not transactions:
         messagebox.showinfo(titre, "Aucune transaction")
         return
+
     fen = tk.Toplevel(root)
     fen.title(f"Rapport - {titre}")
-    fen.geometry("900x500")
+    fen.geometry("950x550")
+
     cols = ("Date","Description","Catégorie","Type","Montant","Compte","Mode")
     tree_rap = ttk.Treeview(fen, columns=cols, show="headings")
+
     scroll = ttk.Scrollbar(fen, orient="vertical", command=tree_rap.yview)
     tree_rap.configure(yscrollcommand=scroll.set)
     scroll.pack(side="right", fill="y")
+
     for c in cols:
         tree_rap.heading(c, text=c)
-        tree_rap.column(c, width=120)
+        tree_rap.column(c, width=120, anchor="center")
+
     tree_rap.pack(fill="both", expand=True, padx=10, pady=10)
-    total_ent = total_sort = 0
+
+    # Style couleurs
+    tree_rap.tag_configure("entree", foreground="green")
+    tree_rap.tag_configure("sortie", foreground="red")
+    tree_rap.tag_configure("total", background="#E0E0E0", font=("Arial", 10, "bold"))
+
+    total_ent = 0
+    total_sort = 0
+
     for t in transactions:
-        tree_rap.insert("", "end", values=(t[7],t[3],t[4],t[1],t[2],t[5],t[6]))
-        if t[1]=="Entrée":
-            total_ent += float(t[2])
+        date = t[7]
+        description = t[3]
+        categorie = t[4]
+        type_tx = t[1]
+        montant = float(t[2])
+        compte = t[5]
+        mode = t[6]
+
+        if type_tx.strip().lower() == "entrée":
+            total_ent += montant
+            tag = "entree"
+        elif type_tx.strip().lower() == "sortie":
+            total_sort += montant
+            tag = "sortie"
         else:
-            total_sort += float(t[2])
+            tag = ""
+
+        tree_rap.insert("", "end",
+                        values=(date, description, categorie, type_tx,
+                                f"{montant:,.2f}", compte, mode),
+                        tags=(tag,))
+
     solde = total_ent - total_sort
-    lbl_tot = tk.Label(fen, text=f"Total Entrées: {total_ent:.2f} F   Total Sorties: {total_sort:.2f} F   Solde: {solde:.2f} F", font=("Arial",12,"bold"))
+
+    # Ligne vide
+    tree_rap.insert("", "end", values=("", "", "", "", "", "", ""))
+
+    # Ligne totaux dans le tableau
+    tree_rap.insert("", "end",
+                    values=("","TOTAL ENTRÉES","", "", f"{total_ent:,.2f} F","", ""),
+                    tags=("total",))
+
+    tree_rap.insert("", "end",
+                    values=("","TOTAL SORTIES","", "", f"{total_sort:,.2f} F","", ""),
+                    tags=("total",))
+
+    tree_rap.insert("", "end",
+                    values=("","SOLDE","", "", f"{solde:,.2f} F","", ""),
+                    tags=("total",))
+
+    # Résumé en bas (optionnel mais plus visible)
+    lbl_tot = tk.Label(
+        fen,
+        text=f"Total Entrées: {total_ent:,.2f} F   |   "
+             f"Total Sorties: {total_sort:,.2f} F   |   "
+             f"Solde: {solde:,.2f} F",
+        font=("Arial",12,"bold")
+    )
     lbl_tot.pack(pady=5)
-    tk.Button(fen, text="Imprimer PDF", command=lambda: imprimer_pdf(transactions, f"Historique_{titre}"), font=("Arial",12)).pack(pady=5)
+
+    tk.Button(
+        fen,
+        text="Imprimer PDF",
+        command=lambda: imprimer_pdf(transactions, f"Historique_{titre}"),
+        font=("Arial",12)
+    ).pack(pady=5)
+
 
 # -----------------------
-# PDF / CSV / Graphique
+# EXPORTATIONS PDF EXCEL
 # -----------------------
+
+
+# ----------------------------
+# PDF
+# ----------------------------
+    
 def imprimer_pdf(transactions, titre):
     file_name = filedialog.asksaveasfilename(
         defaultextension=".pdf",
@@ -314,7 +407,6 @@ def imprimer_pdf(transactions, titre):
 
     styles = getSampleStyleSheet()
 
-    # Style réduit pour le tableau
     small_style = styles["Normal"]
     small_style.fontSize = 8
     small_style.leading = 10
@@ -324,30 +416,39 @@ def imprimer_pdf(transactions, titre):
 
     data_pdf = []
 
-    # En-tête
     header = ["Date","Description","Catégorie","Type","Montant","Compte","Mode"]
     data_pdf.append([Paragraph(h, styles["Heading6"]) for h in header])
 
-    # Données
+    total_ent = 0
+    total_sort = 0
+
     for t in transactions:
+        type_tx = str(t[1]).strip()
+        montant = float(t[2])
+
+        if type_tx.lower() == "entrée":
+            total_ent += montant
+        elif type_tx.lower() == "sortie":
+            total_sort += montant
+
         row = [
             Paragraph(str(t[7]), small_style),
-            Paragraph(str(t[3]), small_style),   # Description avec retour auto
+            Paragraph(str(t[3]), small_style),
             Paragraph(str(t[4]), small_style),
-            Paragraph(str(t[1]), small_style),
-            Paragraph(str(t[2]), small_style),
+            Paragraph(type_tx, small_style),
+            Paragraph(f"{montant:,.2f}", small_style),
             Paragraph(str(t[5]), small_style),
             Paragraph(str(t[6]), small_style),
         ]
         data_pdf.append(row)
 
-    table = Table(data_pdf, colWidths=[55,180,65,45,60,55,55])
+    table = Table(data_pdf, colWidths=[55,180,65,70,70,55,55])
 
     style = TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2196F3")),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('GRID', (0,0), (-1,-1), 0.3, colors.grey),
-        ('ALIGN',(4,1),(4,-1),'RIGHT'),  # Montant aligné à droite
+        ('ALIGN',(4,1), (4,-1),'RIGHT'),
         ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
         ('LEFTPADDING',(0,0),(-1,-1),4),
         ('RIGHTPADDING',(0,0),(-1,-1),4),
@@ -358,10 +459,33 @@ def imprimer_pdf(transactions, titre):
     table.setStyle(style)
     elements.append(table)
 
+    # ----------------------------
+    # RÉSUMÉ EN DEHORS DU TABLEAU
+    # ----------------------------
+
+    solde = total_ent - total_sort
+
+    elements.append(Paragraph("<br/><br/>", styles['Normal']))
+
+    resume_style = styles["Normal"]
+    resume_style.fontSize = 11
+    resume_style.leading = 14
+
+    elements.append(Paragraph(f"<b>Total Entrées :</b> {total_ent:,.2f} F", resume_style))
+    elements.append(Paragraph(f"<b>Total Sorties :</b> {total_sort:,.2f} F", resume_style))
+
+    if solde >= 0:
+        elements.append(Paragraph(f"<b>Solde :</b> <font color='green'>{solde:,.2f} F</font>", resume_style))
+    else:
+        elements.append(Paragraph(f"<b>Solde :</b> <font color='red'>{solde:,.2f} F</font>", resume_style))
+
     doc.build(elements)
 
     messagebox.showinfo("Succès", f"PDF généré : {file_name}")
-
+    
+# ----------------------------
+# EXCEL
+# ----------------------------
 def exporter_csv(transactions):
     file_name = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Transactions.csv")
     if not file_name:
@@ -372,8 +496,6 @@ def exporter_csv(transactions):
         for t in transactions:
             writer.writerow([t[7], t[3], t[4], t[1], t[2], t[5], t[6]])
     messagebox.showinfo("Succès", f"Export CSV généré : {file_name}")
-
-
 
 # -----------------------
 # INTERFACE PRINCIPALE
@@ -391,8 +513,8 @@ font_button = ("Arial", 12, "bold")
 frame_saisie = tk.LabelFrame(root, text="Gestion Transactions", padx=20, pady=20, font=("Arial",14,"bold"))
 frame_saisie.pack(fill="x", padx=20, pady=10)
 
-type_var = tk.StringVar(value="Entrée")
-ttk.Combobox(frame_saisie, textvariable=type_var, values=["Entrée","Sortie"], font=font_entry, width=15).grid(row=0,column=1, padx=5, pady=5)
+type_var = tk.StringVar(value=TYPES_TRANSACTION[0])
+ttk.Combobox(frame_saisie, textvariable=type_var, values=TYPES_TRANSACTION, font=font_entry, width=15).grid(row=0,column=1, padx=5, pady=5)
 tk.Label(frame_saisie,text="Type", font=font_label).grid(row=0,column=0, sticky="w", padx=5, pady=5)
 
 montant_entry = tk.Entry(frame_saisie, font=font_entry, width=17)
@@ -411,9 +533,10 @@ compte_var = tk.StringVar(value=COMPTES[0])
 ttk.Combobox(frame_saisie,textvariable=compte_var, values=COMPTES, font=font_entry, width=15).grid(row=1,column=3, padx=5, pady=5)
 tk.Label(frame_saisie,text="Compte", font=font_label).grid(row=1,column=2, sticky="w", padx=5, pady=5)
 
-mode_var = tk.StringVar(value="Espèces")
-ttk.Combobox(frame_saisie,textvariable=mode_var, values=["Cash", "Chèque", "Lumicash", "Ecocash", "Bancobu Enoti", "Ihera", "Cashtel", "Gasape Cash", "Akaravyo", "Autres"], font=font_entry, width=15).grid(row=1,column=5, padx=5, pady=5)
-tk.Label(frame_saisie,text="Mode", font=font_label).grid(row=1,column=4, sticky="w", padx=5, pady=5)
+mode_var = tk.StringVar(value=MODES_PAIEMENT[0])
+
+ttk.Combobox(frame_saisie,textvariable=mode_var,values=MODES_PAIEMENT,font=font_entry, width=15,state="readonly").grid(row=1, column=5, padx=5, pady=5)
+tk.Label(frame_saisie,text="Mode",font=font_label).grid(row=1, column=4, sticky="w", padx=5, pady=5)
 
 date_entry = DateEntry(frame_saisie, font=font_entry, width=15, date_pattern='dd-mm-yyyy')
 date_entry.grid(row=2,column=1, padx=5, pady=10)
@@ -450,7 +573,7 @@ filtre_date_fin.grid(row=3, column=1, padx=5, pady=5)
 # --- NOUVEAUX CHAMPS (Type, Compte, Mode) ---
 filtre_type = tk.StringVar(value="")
 tk.Label(frame_filtre, text="Type:", font=font_label).grid(row=0, column=2, padx=5, pady=5)
-ttk.Combobox(frame_filtre, textvariable=filtre_type, values=["Entrée", "Sortie"], font=font_entry, width=12).grid(row=0, column=3, padx=5, pady=5)
+ttk.Combobox(frame_filtre, textvariable=filtre_type, values=TYPES_TRANSACTION, font=font_entry, width=12).grid(row=0, column=3, padx=5, pady=5)
 
 filtre_compte = tk.StringVar(value="")
 tk.Label(frame_filtre, text="Compte:", font=font_label).grid(row=1, column=2, padx=5, pady=5)
