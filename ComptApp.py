@@ -394,6 +394,14 @@ def afficher_rapport(transactions, titre):
 # PDF
 # ----------------------------
     
+from reportlab.platypus import Spacer, Paragraph, Table, TableStyle, SimpleDocTemplate, HRFlowable
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+import datetime
+from tkinter import filedialog, messagebox
+
 def imprimer_pdf(transactions, titre):
     file_name = filedialog.asksaveasfilename(
         defaultextension=".pdf",
@@ -402,100 +410,158 @@ def imprimer_pdf(transactions, titre):
     if not file_name:
         return
 
-    doc = SimpleDocTemplate(file_name, pagesize=A4)
+    doc = SimpleDocTemplate(
+        file_name,
+        pagesize=A4,
+        topMargin=20,
+        bottomMargin=20
+    )
     elements = []
 
     styles = getSampleStyleSheet()
+    # Style normal gauche
+    left_style = ParagraphStyle(
+        'left',
+        parent=styles['Normal'],
+        fontSize=7,
+        leading=8,
+        alignment=0  # gauche
+    )
+    # Style montant droit
+    right_style = ParagraphStyle(
+        'right',
+        parent=styles['Normal'],
+        fontSize=7,
+        leading=8,
+        alignment=2  # droite
+    )
 
-    small_style = styles["Normal"]
-    small_style.fontSize = 8
-    small_style.leading = 10
-
+    # Titre
     elements.append(Paragraph(titre, styles['Title']))
-    elements.append(Paragraph("<br/><br/>", styles['Normal']))
+    elements.append(Spacer(1, 5*mm))
 
+    # Tableau
     data_pdf = []
-
     header = ["Date","Description","Catégorie","Type","Montant","Compte","Mode"]
     data_pdf.append([Paragraph(h, styles["Heading6"]) for h in header])
 
-    total_ent = 0
-    total_sort = 0
-
+    total_ent = total_sort = 0
     for t in transactions:
         type_tx = str(t[1]).strip()
         montant = float(t[2])
-
         if type_tx.lower() == "entrée":
             total_ent += montant
         elif type_tx.lower() == "sortie":
             total_sort += montant
 
         row = [
-            Paragraph(str(t[7]), small_style),
-            Paragraph(str(t[3]), small_style),
-            Paragraph(str(t[4]), small_style),
-            Paragraph(type_tx, small_style),
-            Paragraph(f"{montant:,.2f}", small_style),
-            Paragraph(str(t[5]), small_style),
-            Paragraph(str(t[6]), small_style),
+            Paragraph(str(t[7]), left_style),   # Date
+            Paragraph(str(t[3]), left_style),   # Description
+            Paragraph(str(t[4]), left_style),   # Catégorie
+            Paragraph(type_tx, left_style),     # Type
+            Paragraph(f"{montant:,.2f}", right_style),  # Montant
+            Paragraph(str(t[5]), left_style),   # Compte
+            Paragraph(str(t[6]), left_style),   # Mode
         ]
         data_pdf.append(row)
 
     table = Table(data_pdf, colWidths=[55,180,65,70,70,55,55])
-
     style = TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2196F3")),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('GRID', (0,0), (-1,-1), 0.3, colors.grey),
-        ('ALIGN',(4,1), (4,-1),'RIGHT'),
         ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('LEFTPADDING',(0,0),(-1,-1),4),
-        ('RIGHTPADDING',(0,0),(-1,-1),4),
-        ('TOPPADDING',(0,0),(-1,-1),3),
-        ('BOTTOMPADDING',(0,0),(-1,-1),3),
+        ('LEFTPADDING',(0,0),(-1,-1),3),
+        ('RIGHTPADDING',(0,0),(-1,-1),3),
+        ('TOPPADDING',(0,0),(-1,-1),0),
+        ('BOTTOMPADDING',(0,0),(-1,-1),0),
     ])
-
     table.setStyle(style)
     elements.append(table)
 
-    # ----------------------------
-    # RÉSUMÉ EN DEHORS DU TABLEAU
-    # ----------------------------
+    # Ligne de séparation
+    elements.append(Spacer(1, 5*mm))
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
+    elements.append(Spacer(1, 3*mm))
 
+    # Résumé aligné à droite
     solde = total_ent - total_sort
+    resume_style = ParagraphStyle(
+        'resume',
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=9,
+        alignment=2  # droite
+    )
 
-    elements.append(Paragraph("<br/><br/>", styles['Normal']))
-
-    resume_style = styles["Normal"]
-    resume_style.fontSize = 11
-    resume_style.leading = 14
-
-    elements.append(Paragraph(f"<b>Total Entrées :</b> {total_ent:,.2f} F", resume_style))
-    elements.append(Paragraph(f"<b>Total Sorties :</b> {total_sort:,.2f} F", resume_style))
-
+    elements.append(Paragraph(f"<b>Total Entrées :</b> <font color='green'>{total_ent:,.2f} F</font>", resume_style))
+    elements.append(Paragraph(f"<b>Total Sorties :</b> <font color='red'>{total_sort:,.2f} F</font>", resume_style))
     if solde >= 0:
         elements.append(Paragraph(f"<b>Solde :</b> <font color='green'>{solde:,.2f} F</font>", resume_style))
     else:
         elements.append(Paragraph(f"<b>Solde :</b> <font color='red'>{solde:,.2f} F</font>", resume_style))
 
-    doc.build(elements)
+    elements.append(Spacer(1, 5*mm))
+
+    # Date d'impression en bas
+    date_impression = datetime.datetime.today().strftime("%d-%m-%Y %H:%M")
+    footer_style = ParagraphStyle(
+        'footer',
+        parent=styles["Normal"],
+        fontSize=7,
+        alignment=2  # droite
+    )
+    elements.append(Paragraph(f"Date d'impression : {date_impression}", footer_style))
+
+    # Pagination
+    def add_page_number(canvas, doc):
+        page_num = canvas.getPageNumber()
+        canvas.setFont("Helvetica", 7)
+        canvas.drawRightString(A4[0] - 20*mm, 10*mm, f"Page {page_num}")
+
+    doc.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
 
     messagebox.showinfo("Succès", f"PDF généré : {file_name}")
     
 # ----------------------------
 # EXCEL
 # ----------------------------
-def exporter_csv(transactions):
-    file_name = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Transactions.csv")
+from openpyxl import Workbook
+from openpyxl.styles import Alignment
+from tkinter import filedialog, messagebox
+
+def exporter_excel(transactions):
+    file_name = filedialog.asksaveasfilename(
+        defaultextension=".xlsx",
+        initialfile="Transactions.xlsx"
+    )
     if not file_name:
         return
-    with open(file_name,"w",newline="",encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Date","Description","Catégorie","Type","Montant","Compte","Mode"])
-        for t in transactions:
-            writer.writerow([t[7], t[3], t[4], t[1], t[2], t[5], t[6]])
-    messagebox.showinfo("Succès", f"Export CSV généré : {file_name}")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Transactions"
+
+    # Écriture des en-têtes
+    headers = ["Date","Description","Catégorie","Type","Montant","Compte","Mode"]
+    ws.append(headers)
+
+    # Alignement des colonnes
+    for col in range(1, len(headers)+1):
+        ws.cell(row=1, column=col).alignment = Alignment(horizontal='center')
+
+    # Écriture des transactions
+    for t in transactions:
+        ws.append([t[7], t[3], t[4], t[1], t[2], t[5], t[6]])
+
+    # Ajustement automatique de la largeur des colonnes
+    for column_cells in ws.columns:
+        length = max(len(str(cell.value)) for cell in column_cells)
+        ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+
+    wb.save(file_name)
+    messagebox.showinfo("Succès", f"Export Excel généré : {file_name}")
+    
 
 # -----------------------
 # INTERFACE PRINCIPALE
@@ -542,7 +608,7 @@ date_entry = DateEntry(frame_saisie, font=font_entry, width=15, date_pattern='dd
 date_entry.grid(row=2,column=1, padx=5, pady=10)
 tk.Label(frame_saisie,text="Date", font=font_label).grid(row=2,column=0, sticky="w", padx=5, pady=10)
 
-tk.Button(frame_saisie,text="Ajouter/Modifier", command=ajouter_transaction,bg="#4CAF50",fg="white", font=font_button, width=18).grid(row=2,column=3, padx=5, pady=10)
+tk.Button(frame_saisie,text="Ajouter/Modifier", command=ajouter_transaction,bg="#4CAF50",fg="white", font=font_button, width=15).grid(row=2,column=3, padx=5, pady=10)
 tk.Button(frame_saisie,text="Supprimer", command=supprimer_transaction,bg="#f44336",fg="white", font=font_button, width=15).grid(row=2,column=4, padx=5, pady=10)
 tk.Button(frame_saisie,text="Modifier", command=modifier_transaction,bg="#FF9800",fg="white", font=font_button, width=15).grid(row=2,column=5, padx=5, pady=10)
 
@@ -585,8 +651,8 @@ ttk.Combobox(frame_filtre, textvariable=filtre_mode, values=MODES_PAIEMENT, font
 
 
 # --- BOUTONS ---
-tk.Button(frame_filtre,text="Rechercher",command=rechercher_transactions,font=font_button,bg="#2196F3",fg="white").grid(row=4,column=0,columnspan=2,pady=10)
-tk.Button(frame_filtre,text="Tout afficher",command=tout_afficher,font=font_button,bg="#607D8B",fg="white").grid(row=5,column=0,columnspan=2,pady=5)
+tk.Button(frame_filtre,text="Rechercher",command=rechercher_transactions,font=font_button,bg="#2196F3",fg="white",   width=15).grid(row=4,column=0,columnspan=2,pady=10)
+tk.Button(frame_filtre,text="Tout afficher",command=tout_afficher,font=font_button,bg="#607D8B",fg="white",   width=15).grid(row=4,column=2,columnspan=2,pady=5)
 
 
 # --- CARD RÉSUMÉ ---
@@ -643,7 +709,7 @@ tk.Button(frame_rapports,text="Hebdomadaire",command=lambda: afficher_rapport(fi
 tk.Button(frame_rapports,text="Mensuel",command=lambda: afficher_rapport(filtrer_transactions("mois"), "Mensuel"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
 tk.Button(frame_rapports,text="Annuel",command=lambda: afficher_rapport(filtrer_transactions("annee"), "Annuel"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
 tk.Button(frame_rapports,text="Complet",command=lambda: afficher_rapport(lire_transactions(), "Complet"),font=font_button,bg="#4CAF50",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Exporter CSV",command=lambda: exporter_csv(lire_transactions()),font=font_button,bg="#FF9800",fg="white").pack(padx=5,pady=5, fill="x")
+tk.Button(frame_rapports,text="Exporter Excel",command=lambda: exporter_excel(lire_transactions()),font=font_button,bg="#FF9800",fg="white").pack(padx=5, pady=5, fill="x")
 
 # ---- TABLEAU ----
 frame_table = tk.Frame(root)
