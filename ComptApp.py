@@ -8,12 +8,17 @@ from tkcalendar import DateEntry
 from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_pdf import PdfPages
+from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.styles import Alignment
-from collections import defaultdict
 from reportlab.lib import pagesizes
+from matplotlib.gridspec import GridSpec
 import os
 import sys
+import statistics
 
 
 # dossier de l'application (là où se trouve l'exe ou le script)
@@ -141,7 +146,7 @@ def mise_a_jour_tableau(transactions=None):
         text=f"Tot Entrées: {total_entrees:.2f} F   Tot Sorties: {total_sorties:.2f} F   Solde: {solde_cumul:.2f} F"
     )
     mise_a_jour_resume(transactions)
-
+    
 # -----------------------
 # AJOUT / MODIFICATION / SUPPRESSION
 # -----------------------
@@ -787,7 +792,7 @@ def imprimer_pdf_par_categorie_tableau(transactions, titre):
     couleur_solde = colors.green if solde_general > 0 else (colors.yellow if solde_general == 0 else colors.red)
     elements.append(Spacer(1, 3 * mm))
     data_tot = [
-        ["Entrées", "Sorties", "Solde"],
+        ["Total Entrées", "Total Sorties", "Solde"],
         [
             Paragraph(f"{grand_total_ent:,.2f}", ParagraphStyle('entree', textColor=colors.green, fontSize=9, alignment=2)),
             Paragraph(f"{grand_total_sort:,.2f}", ParagraphStyle('sortie', textColor=colors.red, fontSize=9, alignment=2)),
@@ -818,6 +823,245 @@ def imprimer_pdf_par_categorie_tableau(transactions, titre):
     doc.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
     messagebox.showinfo("Succès", f"PDF généré : {file_path}")
 
+#---------------
+#DASHBOARD
+#---------------
+def afficher_dashboard():
+
+    transactions = lire_transactions()
+
+    if not transactions:
+        messagebox.showinfo("Dashboard", "Aucune donnée disponible")
+        return
+
+    # =========================
+    # CALCULS
+    # =========================
+    total_entrees = 0
+    total_sorties = 0
+
+    par_mois = defaultdict(lambda: {"entree": 0, "sortie": 0})
+    par_categorie = defaultdict(lambda: {"entree": 0, "sortie": 0})
+    montants = []
+
+    for t in transactions:
+        try:
+            type_tx = t[1].strip().lower()
+            montant = float(t[2])
+            categorie = t[4]
+            date_obj = datetime.datetime.strptime(t[7], "%Y-%m-%d")
+            mois = date_obj.strftime("%Y-%m")
+
+            montants.append(montant)
+
+            if type_tx == "entrée":
+                total_entrees += montant
+                par_mois[mois]["entree"] += montant
+                par_categorie[categorie]["entree"] += montant
+
+            elif type_tx == "sortie":
+                total_sorties += montant
+                par_mois[mois]["sortie"] += montant
+                par_categorie[categorie]["sortie"] += montant
+
+        except:
+            continue
+
+    solde = total_entrees - total_sorties
+    mois_sorted = sorted(par_mois.keys())
+
+    # =========================
+    # FENÊTRE
+    # =========================
+    fen = tk.Toplevel(root)
+    fen.title("Dashboard Financier Pro")
+    fen.geometry("1350x850")
+    fen.configure(bg="#F3F4F6")
+
+    # =========================
+    # HEADER
+    # =========================
+    header = tk.Frame(fen, bg="#1E3A8A", height=60)
+    header.pack(side="top", fill="x")
+
+    tk.Label(
+        header,
+        text="TABLEAU DE BORD FINANCIER",
+        bg="#1E3A8A",
+        fg="white",
+        font=("Arial", 15, "bold")
+    ).pack(pady=10)
+
+    # =========================
+    # FOOTER
+    # =========================
+    footer = tk.Frame(fen, bg="#E5E7EB", height=60)
+    footer.pack(side="bottom", fill="x")
+
+    # =========================
+    # CONTENT
+    # =========================
+    content = tk.Frame(fen, bg="#F3F4F6")
+    content.pack(side="top", fill="both", expand=True)
+
+    # =========================
+    # FIGURE
+    # =========================
+    fig = plt.Figure(figsize=(13, 7), dpi=100)
+    gs = GridSpec(2, 2, figure=fig)
+
+    # =========================
+    # 1. PIE CHART
+    # =========================
+    ax1 = fig.add_subplot(gs[0, 0])
+
+    def autopct_format(values):
+        def my_format(pct):
+            total = sum(values)
+            val = int(round(pct * total / 100.0))
+            return f"{pct:.1f}%\n({val:,.0f} F)"
+        return my_format
+
+    ax1.pie(
+        [total_entrees, total_sorties],
+        labels=["Entrées", "Sorties"],
+        autopct=autopct_format([total_entrees, total_sorties]),
+        startangle=90,
+        textprops={'fontsize': 9}
+    )
+    ax1.set_title("Entrées vs Sorties")
+
+    # =========================
+    # 2. EVOLUTION MENSUELLE
+    # =========================
+    ax2 = fig.add_subplot(gs[0, 1])
+
+    entrees = [par_mois[m]["entree"] for m in mois_sorted]
+    sorties = [par_mois[m]["sortie"] for m in mois_sorted]
+
+    ax2.plot(mois_sorted, entrees, marker='o', label="Entrées")
+    ax2.plot(mois_sorted, sorties, marker='o', label="Sorties")
+
+    for i, v in enumerate(entrees):
+        ax2.text(i, v, f"{v:,.0f}", fontsize=8, ha='center', va='bottom')
+
+    for i, v in enumerate(sorties):
+        ax2.text(i, v, f"{v:,.0f}", fontsize=8, ha='center', va='top')
+
+    ax2.legend()
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.tick_params(axis='x', rotation=45)
+    ax2.set_title("Évolution Mensuelle")
+
+    # =========================
+    # 3. CATEGORIES
+    # =========================
+    ax3 = fig.add_subplot(gs[1, 0])
+
+    cats = list(par_categorie.keys())
+    vals = [par_categorie[c]["sortie"] for c in cats]
+
+    bars = ax3.barh(cats, vals)
+
+    for bar in bars:
+        width = bar.get_width()
+        ax3.text(
+            width,
+            bar.get_y() + bar.get_height()/2,
+            f"{width:,.0f}",
+            va='center',
+            fontsize=9
+        )
+
+    ax3.set_title("Dépenses par catégorie")
+
+    # =========================
+    # 4. KPI
+    # =========================
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis("off")
+
+    color = "green" if solde >= 0 else "red"
+
+    ax4.text(0.1, 0.85, "INDICATEURS CLÉS", fontsize=13, fontweight="bold")
+    ax4.text(0.1, 0.70, f"Solde : {solde:,.0f} F", fontsize=12, color=color, fontweight="bold")
+    ax4.text(0.1, 0.60, f"Transactions : {len(transactions)}", fontsize=10)
+    ax4.text(0.1, 0.50, f"Moyenne : {sum(montants)/len(montants) if montants else 0:,.0f} F", fontsize=10)
+    ax4.text(0.1, 0.40, f"Max : {max(montants) if montants else 0:,.0f} F", fontsize=10)
+    ax4.text(0.1, 0.30, f"Min : {min(montants) if montants else 0:,.0f} F", fontsize=10)
+
+    ax4.text(0.1, 0.15, "Analyse automatique active", fontsize=9, style='italic')
+
+    # =========================
+    # ❌ FIX IMPORTANT (REMPLACE tight_layout)
+    # =========================
+    fig.subplots_adjust(
+        top=0.92,
+        bottom=0.10,
+        left=0.05,
+        right=0.95,
+        hspace=0.35,
+        wspace=0.25
+    )
+
+    canvas = FigureCanvasTkAgg(fig, master=content)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================
+    # EXPORT PDF
+    # =========================
+    def exporter_pdf():
+        dossier = os.path.join(APP_FOLDER, "rapports")
+        os.makedirs(dossier, exist_ok=True)
+
+        nom = datetime.datetime.now().strftime("dashboard_%Y%m%d_%H%M%S.pdf")
+        chemin = os.path.join(dossier, nom)
+
+        fig.text(0.5, 0.96,
+                 "TABLEAU DE BORD FINANCIER",
+                 ha='center', fontsize=12, fontweight='bold')
+
+        fig.text(0.5, 0.03,
+                 f"Exporté le {datetime.datetime.now().strftime('%d-%m-%Y %H:%M')}",
+                 ha='center', fontsize=9)
+
+        with PdfPages(chemin) as pdf:
+            pdf.savefig(fig, bbox_inches='tight')
+
+        messagebox.showinfo("Succès", f"PDF généré : {chemin}")
+
+    def fermer():
+        fen.destroy()
+
+    # =========================
+    # BOUTONS
+    # =========================
+    btn_export = tk.Button(
+        footer,
+        text="📤 Exporter PDF",
+        bg="#2563EB",
+        fg="white",
+        font=("Arial", 10, "bold"),
+        command=exporter_pdf
+    )
+    btn_export.pack(side="left", padx=20, pady=10)
+
+    tk.Label(
+        footer,
+        text="Dashboard financier - Analyse automatique",
+        bg="#E5E7EB"
+    ).pack(side="left", padx=20)
+
+    btn_close = tk.Button(
+        footer,
+        text="❌ Fermer",
+        bg="#DC2626",
+        fg="white",
+        font=("Arial", 10, "bold"),
+        command=fermer
+    )
+    btn_close.pack(side="right", padx=20, pady=10)
 
 # -----------------------
 # EXPORTATIONS PDF EXCEL
@@ -988,52 +1232,156 @@ font_button = ("Arial", 12, "bold")
 frame_top = tk.Frame(root)
 frame_top.pack(fill="both", expand=True, padx=10, pady=10)
 
+# ---- FRAME PARENT POUR SAISIE ET RECHERCHE ----
+frame_top = tk.Frame(root)
+frame_top.pack(fill="x", expand=True, padx=20, pady=10)
 
+# ---- FRAME GESTION TRANSACTIONS (GAUCHE) ----
+frame_saisie = tk.LabelFrame(frame_top, text="Gestion des Transactions", padx=20, pady=20, font=("Arial",14,"bold"))
+frame_saisie.pack(side="left", fill="x", expand=True, padx=(0,10))  # expand=True pour s'adapter à l'espace
 
-# ---- SAISIE ----
-frame_saisie = tk.LabelFrame(root, text="Gestion Transactions", padx=20, pady=20, font=("Arial",14,"bold"))
-frame_saisie.pack(fill="x", padx=20, pady=10)
-
+# ---- TYPE ----
 type_var = tk.StringVar(value=TYPES_TRANSACTION[0])
 ttk.Combobox(frame_saisie, textvariable=type_var, values=TYPES_TRANSACTION, font=font_entry, width=15).grid(row=0,column=1, padx=5, pady=5)
 tk.Label(frame_saisie,text="Type", font=font_label).grid(row=0,column=0, sticky="w", padx=5, pady=5)
 
+# ---- MONTANT ----
 montant_entry = tk.Entry(frame_saisie, font=font_entry, width=17)
 montant_entry.grid(row=0,column=3, padx=5, pady=5)
 tk.Label(frame_saisie,text="Montant", font=font_label).grid(row=0,column=2, sticky="w", padx=5, pady=5)
 
+# ---- DESCRIPTION ----
 description_entry = tk.Entry(frame_saisie, font=font_entry, width=17)
 description_entry.grid(row=0,column=5, padx=5, pady=5)
 tk.Label(frame_saisie,text="Description", font=font_label).grid(row=0,column=4, sticky="w", padx=5, pady=5)
 
+# ---- CATEGORIE ----
 categorie_var = tk.StringVar(value=CATEGORIES[0])
 ttk.Combobox(frame_saisie,textvariable=categorie_var, values=CATEGORIES, font=font_entry, width=15).grid(row=1,column=1, padx=5, pady=5)
 tk.Label(frame_saisie,text="Catégorie", font=font_label).grid(row=1,column=0, sticky="w", padx=5, pady=5)
 
+# ---- COMPTE ----
 compte_var = tk.StringVar(value=COMPTES[0])
 ttk.Combobox(frame_saisie,textvariable=compte_var, values=COMPTES, font=font_entry, width=15).grid(row=1,column=3, padx=5, pady=5)
 tk.Label(frame_saisie,text="Compte", font=font_label).grid(row=1,column=2, sticky="w", padx=5, pady=5)
 
+# ---- MODE DE PAIEMENT ----
 mode_var = tk.StringVar(value=MODES_PAIEMENT[0])
-
-ttk.Combobox(frame_saisie,textvariable=mode_var,values=MODES_PAIEMENT,font=font_entry, width=15,state="readonly").grid(row=1, column=5, padx=5, pady=5)
+ttk.Combobox(frame_saisie,textvariable=mode_var,values=MODES_PAIEMENT,font=font_entry,width=15,state="readonly").grid(row=1, column=5, padx=5, pady=5)
 tk.Label(frame_saisie,text="Mode",font=font_label).grid(row=1, column=4, sticky="w", padx=5, pady=5)
 
+# ---- DATE ----
 date_entry = DateEntry(frame_saisie, font=font_entry, width=15, date_pattern='dd-mm-yyyy')
 date_entry.grid(row=2,column=1, padx=5, pady=10)
 tk.Label(frame_saisie,text="Date", font=font_label).grid(row=2,column=0, sticky="w", padx=5, pady=10)
 
-tk.Button(frame_saisie,text="Ajouter/Modifier", command=ajouter_transaction,bg="#4CAF50",fg="white", font=font_button, width=15).grid(row=2,column=3, padx=5, pady=10)
+# ---- BOUTONS ----
+tk.Button(frame_saisie,text="Ajouter/Modifier", command=ajouter_transaction,
+          bg="#4CAF50",fg="white", font=font_button, width=15).grid(row=2,column=3, padx=5, pady=10)
+
 tk.Button(frame_saisie,text="Supprimer", command=demander_mot_de_passe,
-          bg="#f44336",fg="white", font=font_button, width=15
-).grid(row=2,column=4, padx=5, pady=10)
-tk.Button(frame_saisie,text="Modifier", command=modifier_transaction,bg="#FF9800",fg="white", font=font_button, width=15).grid(row=2,column=5, padx=5, pady=10)
+          bg="#f44336",fg="white", font=font_button, width=15).grid(row=2,column=4, padx=5, pady=10)
+
+tk.Button(frame_saisie,text="Modifier", command=modifier_transaction,
+          bg="#FF9800",fg="white", font=font_button, width=15).grid(row=2,column=5, padx=5, pady=10)
+
+
+# ---- FRAME RECHERCHE (DROITE) ----
+frame_recherche = tk.LabelFrame(frame_top, text="Recherche", padx=10, pady=10, font=("Arial",12,"bold"))
+frame_recherche.pack(side="right")  # aligné à droite
+
+recherche_var = tk.StringVar()
+
+tk.Label(frame_recherche, text="Recherche", font=font_label).grid(row=0, column=0, padx=5, pady=5)
+recherche_entry = tk.Entry(frame_recherche, textvariable=recherche_var, font=font_entry, width=20)
+recherche_entry.grid(row=0, column=1, padx=5, pady=5)
+
+# ---- FONCTION RECHERCHE ----
+def charger_transactions():
+
+    for item in tree.get_children():
+        tree.delete(item)
+
+    conn = sqlite3.connect("comptabilite.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, type, montant, description, categorie, compte, mode_paiement, date
+        FROM transactions
+        ORDER BY date DESC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    total_entrees = 0
+    total_sorties = 0
+    solde_cumul = 0
+
+    for t in rows:
+
+        id_, type_, montant, description, categorie, compte, mode_paiement, date = t
+
+        montant = float(montant)
+
+        debit = 0
+        credit = 0
+
+        if type_ == "Entrée":
+            credit = montant
+            total_entrees += montant
+            solde_cumul += montant
+        else:
+            debit = montant
+            total_sorties += montant
+            solde_cumul -= montant
+
+        tree.insert("", "end",
+            values=(
+                id_,
+                date,
+                description,
+                categorie,
+                type_,
+                credit,
+                debit,
+                solde_cumul,
+                compte,
+                mode_paiement
+            )
+        )
+
+    total_label.config(
+        text=f"Tot Entrées: {total_entrees:.2f} F   Tot Sorties: {total_sorties:.2f} F   Solde: {solde_cumul:.2f} F"
+    )
+    
+    
+def rechercher_transaction(event=None):
+
+    mot = recherche_var.get().lower()
+
+    if mot == "":
+        charger_transactions()
+        return
+
+    for item in tree.get_children():
+        valeurs = tree.item(item)["values"]
+
+        texte = " ".join(str(v).lower() for v in valeurs)
+
+        if mot not in texte:
+            tree.delete(item)
+
+# ---- ACTIVER RECHERCHE AUTOMATIQUE ----
+recherche_entry.bind("<KeyRelease>", rechercher_transaction)
+
+
 
 # ---- FILTRE ET RAPPORTS ----
 frame_top = tk.Frame(root)
 frame_top.pack(fill="x", padx=20, pady=10)
 
-frame_filtre = tk.LabelFrame(frame_top, text="Recherche / Filtrage", padx=10, pady=10, font=("Arial",12,"bold"))
+frame_filtre = tk.LabelFrame(frame_top, text="Filtrage", padx=10, pady=10, font=("Arial",12,"bold"))
 frame_filtre.pack(side="left", padx=10, pady=5)
 
 # --- CHAMPS EXISTANTS ---
@@ -1115,11 +1463,13 @@ def mise_a_jour_infos(transactions=None):
         transactions = lire_transactions()
     
     nb_transactions = len(transactions)
-    derniere_trans = transactions[-1] if transactions else None
+
+   
+    derniere_trans = max(transactions, key=lambda x: x[0]) if transactions else None
     
     if derniere_trans:
         dernier_detail = (
-            f"Date: {derniere_trans[0]}\n"
+            f"{derniere_trans[0]}\n"
             f"Type: {derniere_trans[1]}\n"
             f"Montant: {derniere_trans[2]:,.2f} F"
         )
@@ -1127,20 +1477,64 @@ def mise_a_jour_infos(transactions=None):
         dernier_detail = "Aucune"
 
     infos_label.config(
-        text=f"Nombre total de transactions:\n    {nb_transactions}\n\n"
-             f"Dernière transaction:\n    {dernier_detail}"
+        text=f"Nb total de trans:    {nb_transactions}\n"
+             f"Dernière trans numéro:    {dernier_detail}"
     )
+    
+    
+    
     
 # --- RAPPORTS À DROITE ---
 frame_rapports = tk.LabelFrame(frame_top, text="Rapports", padx=10, pady=10, font=("Arial",12,"bold"))
 frame_rapports.pack(side="right", padx=10)
-tk.Button(frame_rapports,text="Journalier",command=lambda: afficher_rapport(filtrer_transactions("jour"), "Journalier"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Hebdomadaire",command=lambda: afficher_rapport(filtrer_transactions("semaine"), "Hebdomadaire"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Mensuel",command=lambda: afficher_rapport(filtrer_transactions("mois"), "Mensuel"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Annuel",command=lambda: afficher_rapport(filtrer_transactions("annee"), "Annuel"),font=font_button,bg="#2196F3",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Complet",command=lambda: afficher_rapport(lire_transactions(), "Complet"),font=font_button,bg="#4CAF50",fg="white").pack(padx=5,pady=5, fill="x")
-tk.Button(frame_rapports,text="Export Excel",command=lambda: exporter_excel(lire_transactions()),font=font_button,bg="#FF9800",fg="white").pack(padx=5, pady=5, fill="x")
-tk.Button(frame_rapports,text="Par Catégorie",command=lambda: afficher_rapport_par_categorie(lire_transactions()),font=font_button,bg="#9C27B0",fg="white").pack(padx=5, pady=5, fill="x")
+
+# Configuration des colonnes (responsive)
+frame_rapports.columnconfigure(0, weight=1)
+frame_rapports.columnconfigure(1, weight=1)
+
+# --- BOUTONS (2 PAR LIGNE) ---
+tk.Button(frame_rapports, text="Journalier",
+          command=lambda: afficher_rapport(filtrer_transactions("jour"), "Journalier"),
+          font=font_button, bg="#2196F3", fg="white")\
+.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+
+tk.Button(frame_rapports, text="Hebdomadaire",
+          command=lambda: afficher_rapport(filtrer_transactions("semaine"), "Hebdomadaire"),
+          font=font_button, bg="#2196F3", fg="white")\
+.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+
+tk.Button(frame_rapports, text="Mensuel",
+          command=lambda: afficher_rapport(filtrer_transactions("mois"), "Mensuel"),
+          font=font_button, bg="#2196F3", fg="white")\
+.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+
+tk.Button(frame_rapports, text="Annuel",
+          command=lambda: afficher_rapport(filtrer_transactions("annee"), "Annuel"),
+          font=font_button, bg="#2196F3", fg="white")\
+.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+
+tk.Button(frame_rapports, text="Complet",
+          command=lambda: afficher_rapport(lire_transactions(), "Complet"),
+          font=font_button, bg="#4CAF50", fg="white")\
+.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+
+tk.Button(frame_rapports, text="Export Excel",
+          command=lambda: exporter_excel(lire_transactions()),
+          font=font_button, bg="#FF9800", fg="white")\
+.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+
+
+tk.Button(frame_rapports, text="Par Catégorie",
+          command=lambda: afficher_rapport_par_categorie(lire_transactions()),
+          font=font_button, bg="#9C27B0", fg="white")\
+.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+
+tk.Button(frame_rapports, text="Dashboard",
+          command=afficher_dashboard,
+          font=font_button, bg="#000000", fg="white")\
+.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
 
 # ---- TABLEAU ----
 frame_table = tk.Frame(root)
